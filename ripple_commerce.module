@@ -5,9 +5,20 @@ function ripple_commerce_commerce_payment_method_info() {
     'title' => t('Ripple via REST API'),
     'short_title' => t('Ripple'),
     'description' => t('Ripple (desc)'),
+
+    // Whether or not the customer must be redirected offsite to put in their
+    // payment information;
+    // used specifically by the offsite payment redirect checkout pane.
     'offsite' => TRUE, // Will redirect to ripple wallet.
-    'offsite_autoredirect' => TRUE,
+
+    // Whether or not the customer should be automatically redirected
+    // to an offsite payment site on the payment step of checkout.
+    'offsite_autoredirect' => FALSE, // <- no idea what this does.  -dave
+
+    // Whether or not payments can be processed via this payment method through
+    // the administrative payment terminal on an order’s Payment tab.
     'terminal' => FALSE,
+
     'file' => 'ripple_commerce.rest.inc',
   );
 
@@ -25,11 +36,148 @@ function ripple_commerce_commerce_payment_transaction_status_info() {
 function ripple_commerce_commerce_currency_info() {
   $items['XRP'] = array(
     'code' => 'XRP',
-    'symbol' => 'xrp',
-    'name' => t('Ripple ripple'),
-    'major_unit' => t('xrp'),
+    'code_placement' => 'after',
+    'symbol' => '¤',
+    'symbol_placement' => 'before',
+    'name' => t('Ripple'),
+    'major_unit' => t('ripple'),
     'minor_unit' => t('drops'),
-    'rounding_step' => 0.0000001,
+
+    'rounding_step' => 0.000001,
+    'decimals' => 6,
   );
   return $items;
+}
+
+
+/**
+ * Creates a payment transaction for the specified charge amount.
+ *
+ * @param array $payment_method
+ *   The payment method instance object used to charge this payment.
+ * @param object $order
+ *   The order object the payment applies to.
+ * @param array $charge
+ *   An array indicating the amount and currency code to charge.
+ */
+function ripple_commerce_transaction_create($payment_method, $order) {
+  // Calculate proper amount, using very complicated Commerce API.
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+  $orig_amount = $order_wrapper->commerce_order_total->amount->value();
+  $currency = $order_wrapper->commerce_order_total->currency_code->value();
+  $amount = commerce_currency_amount_to_decimal($orig_amount, $currency) . '/' . $currency;
+
+
+  $transaction = commerce_payment_transaction_new('ripple_commerce', $order->order_id);
+
+  $transaction->instance_id = $payment_method['instance_id'];
+  $transaction->remote_id = 'Default';
+  $transaction->amount = $orig_amount; // Transaction needs unrounded original amount.
+  $transaction->currency_code = $currency;
+  $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+  $transaction->remote_status = 'new';
+  $transaction->message = 'Initialized transaction';
+  $transaction->message_variables = array();
+
+  $transaction->data['payment_method_settings'] = $payment_method['settings'];
+
+  commerce_payment_transaction_save($transaction);
+
+  // Does transaction have its id now???
+  dpm($transaction, __FUNCTION__);
+  return $transaction;
+}
+
+
+
+/**
+ * Implements hook_cron().
+ *
+ */
+function ripple_commerce_cron() {
+
+  // The following logic relies on transactions being created when sending a user to their ripple wallet, and using the transaction id as destination tag.
+  // It seems more desirable to use the order id as the destination tag, and to not create a transaction until a payment is received.  However if we try that approach, drupal commerce does not give us a way to query for which ripple accounts need to be queried.  That data we store in the transaction.
+
+  $limit = variable_get('ripple_commerce__cron_threshold', 1);
+
+  // Query local database for transactions not yet processed.
+  $pending_accounts = array();
+  $result = db_select('commerce_payment_transaction', 'cpt')
+    ->fields('cpt', array('transaction_id', 'order_id', 'remote_id'))
+    ->condition('cpt.payment_method', 'ripple_commerce')
+    ->condition('cpt.remote_status', 'new')
+    //->condition('cpt.changed', REQUEST_TIME - 930, '<')
+    ->orderBy('cpt.transaction_id', 'ASC')
+    ->range(0, $limit)
+    ->execute();
+
+  if ($result) {
+    foreach ($result as $row) {
+      $transaction = commerce_payment_transaction_load($row->transaction_id);
+      $order = commerce_order_load($row->order_id);
+      // @todo If transaction too old, give up on it.
+      $pending_accounts[$order->data['ripple_account']] = TRUE;
+    }
+  }
+
+  foreach ($pending_accounts as $account => $dummy) {
+    $ledger_var = 'ripple_commerce__' . $account . '__cron_next_ledger';
+    $page_var = 'ripple_commerce__' . $account . '__cron_next_page';
+    $ledger = variable_get($ledger_var, 0);
+    $page = variable_get($page_var, 1);
+
+    // Query ledger for transactions we haven't seen on this account.
+    $result = ripple_rest('accounts/' . $account . '/payments', array(
+                            'query' => array(
+                              'directions' => 'incoming',
+                              'earliest_first' => 'true',
+                              'start_ledger' => $ledger,
+                              'page' => $page,
+                              'results_per_page' => 20,
+                            )));
+    if (!empty($result['success'])) {
+      $last_ledger = 0;
+      foreach ($result['payments'] as $payment_data) {
+        if ($payment['destination_account'] != $account) {
+          // Sanity check, should never be reached as long as our accounts query above is correct.
+          continue;
+        }
+
+        $payment = $payment_data['payment'];
+
+        $transaction = commerce_payment_transaction_load($payment['destination_tag']);
+        $transaction->payload = $payment;
+        $transaction->remote_status = $payment['result']; // Should this be $payment['state']???
+        $transaction->currency = $payment['destination_amount']['currency'];
+        $transaction->amount = commerce_currency_decimal_to_amount($payment['destination_amount']['amount'], $transaction->currenct);
+
+        // Confirm payment succeded
+        // (Not sure whether result==tesSUCCESS or state=validated is best test)
+        if ($payment['result'] == 'tesSUCCESS') {
+          $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        }
+        else {
+          $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+        }
+
+        // @todo, does order log need update?
+
+        commerce_payment_transaction_save($transaction);
+        commerce_payment_transaction_insert($transaction);
+
+        $last_ledger = max($last_ledger, $payment['ledger']);
+      }
+
+      if (count($result['payments'] >= 20)) {
+        // If 20 payments returned, we need to inspect next page, next ledger.
+        variable_set($page_var, $page + 1);
+      }
+      else {
+        // Otherwise, advance ledger.
+        variable_set($ledger_var, $last_ledger + 1);
+      }
+
+    }
+  }
 }
