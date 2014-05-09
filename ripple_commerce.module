@@ -1,0 +1,35 @@
+<?php
+
+function ripple_commerce_commerce_payment_method_info() {
+  $items['ripple_commerce_rest'] = array(
+    'title' => t('Ripple via REST API'),
+    'short_title' => t('Ripple'),
+    'description' => t('Ripple (desc)'),
+    'offsite' => TRUE, // Will redirect to ripple wallet.
+    'offsite_autoredirect' => TRUE,
+    'terminal' => FALSE,
+    'file' => 'ripple_commerce.rest.inc',
+  );
+
+  return $items;
+}
+
+
+function ripple_commerce_commerce_payment_transaction_status_info() {
+  dpm(func_get_args(), __FUNCTION__);
+}
+
+/**
+ * Implements hook_commerce_currency_info()
+ */
+function ripple_commerce_commerce_currency_info() {
+  $items['XRP'] = array(
+    'code' => 'XRP',
+    'symbol' => 'xrp',
+    'name' => t('Ripple ripple'),
+    'major_unit' => t('xrp'),
+    'minor_unit' => t('drops'),
+    'rounding_step' => 0.0000001,
+  );
+  return $items;
+}

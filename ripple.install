@@ -1,0 +1,41 @@
+<?php
+
+function ripple_requirements($phase) {
+  $t = get_t();
+  $items = array();
+
+  // Disable these checks at install time, because failure then causes more
+  // problems due to module dependencies and Drupal's poor handling of
+  // requirement errors.
+  if ($phase != 'runtime') {
+    return $items;
+  }
+
+  $status = array(
+    'title' => $t('Ripple <a href=!url>REST server</a>', array(
+                    '!url' => url(RIPPLE_PATH_ADMIN),
+                  )),
+    'severity' => REQUIREMENT_ERROR,
+    'value' => $t('No response from REST API'),
+  );
+
+  try {
+    $server = ripple_rest('server');
+
+    if ($server['success']) {
+      $status['severity'] = REQUIREMENT_OK;
+      $status['value'] = $t('Ledger sequence #%num via %url', array(
+                              '%num' => $server['rippled_server_status']['validated_ledger']['seq'],
+                              '%url' => $server['rippled_server_url'],
+                            ));
+    }
+  }
+  catch (Exception $e) {
+    dpm($e, __FUNCTION__);
+    $status['value'] = $e->getMessage();
+  }
+
+  $items['ripple_rest'] = $status;
+
+  return $items;
+}
