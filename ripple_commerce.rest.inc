@@ -1,7 +1,6 @@
 <?php
 
 function ripple_commerce_rest_settings_form($settings = array()) {
-  dpm(func_get_args(), __FUNCTION__);
 
   // Defaults to avoid PHP notices.
   $settings += array(
@@ -45,7 +44,7 @@ function ripple_commerce_rest_settings_form($settings = array()) {
   return $form;
 }
 
-function ripple_commerce_rest_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+function ripple_commerce_rest_submit_formXXX($payment_method, $pane_values, $checkout_pane, $order) {
   dpm(func_get_args(), __FUNCTION__);
 }
 
@@ -89,8 +88,6 @@ function ripple_commerce_rest_submit_form_submitXXX($payment_method, $pane_form,
  * How to redirect is copied from commerce_paypal_ec_redirect_form.
  */
 function ripple_commerce_rest_redirect_form($form, &$form_state, $order, $payment_method) {
-  dpm(func_get_args(), __FUNCTION__);
-  dpm($order, __FUNCTION__);
 
   // Payment methods defaults.
   foreach (array(
@@ -124,10 +121,10 @@ function ripple_commerce_rest_redirect_form($form, &$form_state, $order, $paymen
   // Calculate proper amount.
   $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
   $orig_amount = $order_wrapper->commerce_order_total->amount->value();
-  $amount = commerce_currency_amount_to_decimal($orig_amount, $currency) . '/' . $currency;
-
+  $currency = $order_wrapper->commerce_order_total->currency_code->value();
 
   // Build the ripple URI.  https://ripple.com/wiki/Ripple_URIs
+  $amount = commerce_currency_amount_to_decimal($orig_amount, $currency) . '/' . $currency;
   $query = array(
     //'dt' => $order->order_number,
     'dt' => $transaction->transaction_id,
@@ -137,6 +134,8 @@ function ripple_commerce_rest_redirect_form($form, &$form_state, $order, $paymen
                    '!site_name' => variable_get('site_name', 'Drupal'),
                    '!order_number' => $order->order_number,
                  )),
+
+    // Current ripple client seems to do nothing with these urls.
     'return_url' => $return_url,
     'abort_url' => $abort_url,
   );

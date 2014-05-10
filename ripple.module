@@ -47,7 +47,8 @@ function ripple_http_parse_response($response) {
     throw new Exception($response->error, $response->code);
   }
   else {
-    dpm(func_get_args(), __FUNCTION__);
+    // @todo Is this ever reached?
+    //dpm(func_get_args(), __FUNCTION__);
   }
   return $data;
 }

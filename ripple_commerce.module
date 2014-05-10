@@ -25,9 +25,11 @@ function ripple_commerce_commerce_payment_method_info() {
   return $items;
 }
 
-
+/**
+ * @todo figure out how to use this hook.
+ */
 function ripple_commerce_commerce_payment_transaction_status_info() {
-  dpm(func_get_args(), __FUNCTION__);
+  //dpm(func_get_args(), __FUNCTION__);
 }
 
 /**
@@ -65,8 +67,6 @@ function ripple_commerce_transaction_create($payment_method, $order) {
   $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
   $orig_amount = $order_wrapper->commerce_order_total->amount->value();
   $currency = $order_wrapper->commerce_order_total->currency_code->value();
-  $amount = commerce_currency_amount_to_decimal($orig_amount, $currency) . '/' . $currency;
-
 
   $transaction = commerce_payment_transaction_new('ripple_commerce', $order->order_id);
 
@@ -83,8 +83,6 @@ function ripple_commerce_transaction_create($payment_method, $order) {
 
   commerce_payment_transaction_save($transaction);
 
-  // Does transaction have its id now???
-  dpm($transaction, __FUNCTION__);
   return $transaction;
 }
 
@@ -95,29 +93,38 @@ function ripple_commerce_transaction_create($payment_method, $order) {
  *
  */
 function ripple_commerce_cron() {
-
   // The following logic relies on transactions being created when sending a user to their ripple wallet, and using the transaction id as destination tag.
   // It seems more desirable to use the order id as the destination tag, and to not create a transaction until a payment is received.  However if we try that approach, drupal commerce does not give us a way to query for which ripple accounts need to be queried.  That data we store in the transaction.
 
   $limit = variable_get('ripple_commerce__cron_threshold', 1);
+  $too_old = REQUEST_TIME - variable_get('ripple_commerce__transaction_max_age', 1 * 60 * 60);
+
+  $pending_accounts = array();
+  $old_transactions = array();
+  $failed_transactions = array();
+  $ok_transactions = array();
 
   // Query local database for transactions not yet processed.
-  $pending_accounts = array();
   $result = db_select('commerce_payment_transaction', 'cpt')
     ->fields('cpt', array('transaction_id', 'order_id', 'remote_id'))
     ->condition('cpt.payment_method', 'ripple_commerce')
     ->condition('cpt.remote_status', 'new')
-    //->condition('cpt.changed', REQUEST_TIME - 930, '<')
-    ->orderBy('cpt.transaction_id', 'ASC')
+    ->condition('cpt.status', COMMERCE_PAYMENT_STATUS_PENDING)
+    ->orderBy('cpt.changed', 'ASC')
     ->range(0, $limit)
     ->execute();
 
   if ($result) {
     foreach ($result as $row) {
       $transaction = commerce_payment_transaction_load($row->transaction_id);
-      $order = commerce_order_load($row->order_id);
-      // @todo If transaction too old, give up on it.
-      $pending_accounts[$order->data['ripple_account']] = TRUE;
+      // We will query ledger for transactions to this account.
+      $pending_accounts[$transaction->data['payment_method_settings'][RIPPLE_VAR_ACCOUNT]] = TRUE;
+
+      if ($transaction->changed < $too_old) {
+        // If ledger has no payment, give up on this old transaction.
+        $old_transactions[$transaction->transaction_id] = $transaction->transaction_id;
+      }
+
     }
   }
 
@@ -137,47 +144,77 @@ function ripple_commerce_cron() {
                               'results_per_page' => 20,
                             )));
     if (!empty($result['success'])) {
-      $last_ledger = 0;
+      $last_ledger = $ledger;
       foreach ($result['payments'] as $payment_data) {
+        $payment = $payment_data['payment'];
+
         if ($payment['destination_account'] != $account) {
           // Sanity check, should never be reached as long as our accounts query above is correct.
           continue;
         }
 
-        $payment = $payment_data['payment'];
-
         $transaction = commerce_payment_transaction_load($payment['destination_tag']);
+        if (!$transaction) {
+          // Expected a transaction id, but found none.
+          watchdog('ripple_commerce', 'Ripple payment destination_tag %tag not recognized.  Is wallet %account being used with another payment system?  Overlapping destination tags can break Drupal Commerce orders and transactions!', array(
+                     '%account' => $account,
+                     '%tag' => $payment['destination_tag'],
+                   ), WATCHDOG_ERROR);
+          // Not sure if a continue is wise here.  Could be more strict, i.e. throw exception.
+          continue;
+        }
+        if ($transaction->status != COMMERCE_PAYMENT_STATUS_PENDING) {
+          // Ripple ledger is returning a payment that we've already processed.
+          continue;
+        }
+
         $transaction->payload = $payment;
         $transaction->remote_status = $payment['result']; // Should this be $payment['state']???
         $transaction->currency = $payment['destination_amount']['currency'];
-        $transaction->amount = commerce_currency_decimal_to_amount($payment['destination_amount']['amount'], $transaction->currenct);
+        $transaction->amount = commerce_currency_decimal_to_amount($payment['destination_amount']['value'], $transaction->currency);
 
         // Confirm payment succeded
         // (Not sure whether result==tesSUCCESS or state=validated is best test)
         if ($payment['result'] == 'tesSUCCESS') {
           $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+          $ok_transactions[$transaction->transaction_id] = $transaction->transaction_id;
         }
         else {
           $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+          $failed_transactions[$transaction->transaction_id] = $transaction->transaction_id;
         }
 
         // @todo, does order log need update?
 
         commerce_payment_transaction_save($transaction);
-        commerce_payment_transaction_insert($transaction);
+
+        unset($old_transactions[$transaction->transaction_id]);
 
         $last_ledger = max($last_ledger, $payment['ledger']);
       }
 
-      if (count($result['payments'] >= 20)) {
+      if (count($result['payments']) >= 20) {
         // If 20 payments returned, we need to inspect next page, next ledger.
         variable_set($page_var, $page + 1);
       }
       else {
         // Otherwise, advance ledger.
         variable_set($ledger_var, $last_ledger + 1);
+        variable_set($page_var, 1);
       }
 
     }
+  }
+
+  // Give up on old transactions.
+  if ($count = count($old_transactions)) {
+    watchdog('ripple_commerce', 'Deleting %count stale transaction(s).', array('%count' => $count), WATCHDOG_DEBUG);
+    commerce_payment_transaction_delete_multiple($old_transactions);
+  }
+  if (count($ok_transactions) || count($failed_transactions)) {
+    watchdog('ripple_commerce', 'Ripple ledger reports %ok_count payments via Ripple and %failure_count failed transactions.', array(
+               '%ok_count' => count($ok_transactions),
+               '%failure_count' => count($failed_transactions),
+             ), WATCHDOG_DEBUG);
   }
 }
