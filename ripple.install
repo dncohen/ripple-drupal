@@ -1,5 +1,129 @@
 <?php
 
+function ripple_schema() {
+  $schema['ripple_payment'] = array(
+    'description' => 'Track payments to/from Ripple accounts.',
+    'fields' => array(
+      'realm' => array(
+        'description' => 'Allows multiple modules to use this table.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+
+      // Transaction identifying information
+      'ledger' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'hash' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'timestamp' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+
+      // Source data
+      'source_account' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'source_tag' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'source_amount_value' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'source_amount_currency' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'source_amount_issuer' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      // Not sure whether balance changes belong in their own table or not.
+      'source_balance_changes' => array(
+        'description' => 'Serialized details',
+        'type' => 'blob',
+        'not null' => TRUE,
+        'size' => 'big',
+        'serialize' => TRUE,
+      ),
+
+      // Destination data
+      'destination_account' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'destination_tag' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'destination_amount_value' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'destination_amount_currency' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'destination_amount_issuer' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      // Not sure whether balance changes belong in their own table or not.
+      'destination_balance_changes' => array(
+        'description' => 'Serialized details',
+        'type' => 'blob',
+        'not null' => TRUE,
+        'size' => 'big',
+        'serialize' => TRUE,
+      ),
+
+
+      'invoice_id' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+
+
+    ),
+    'unique keys' => array(
+      'realm_hash' => array('realm', 'hash'),
+    ),
+    'indexes' => array(
+      'realm' => array('realm'),
+      'hash' => array('hash'),
+      'source_account' => array('source_account'),
+      'source_tag' => array('source_tag'),
+      'destination_account' => array('destination_account'),
+      'destination_tag' => array('destination_tag'),
+      'invoice_id' => array('invoice_id'),
+    ),
+  );
+
+  return $schema;
+}
+
 function ripple_requirements($phase) {
   $t = get_t();
   $items = array();
@@ -33,6 +157,7 @@ function ripple_requirements($phase) {
   catch (Exception $e) {
     $status['value'] = $e->getMessage();
     $status['severity'] = REQUIREMENT_ERROR;
+    $status['description'] = t('Is the Ripple REST server running?');
   }
 
   $items['ripple_rest'] = $status;
@@ -47,25 +172,81 @@ function ripple_requirements($phase) {
   );
   if ($account = variable_get(RIPPLE_VAR_ACCOUNT, NULL)) {
     $status['value'] = $account;
-    // Trustlines will determine which currencies can be accepted.
-    $data = ripple_rest('accounts/' . $account . '/trustlines');
-    if (!$data['success']) {
-      $status['severity'] = REQUIREMENT_ERROR;
-      $status['description'] = $data['message'];
-    }
-    else {
-      $status['severity'] = REQUIREMENT_OK;
-      $accepts = array('XRP');
-      foreach ($data['trustlines'] as $trustline) {
-        $currency = $trustline['currency'];
-        $accepts[$currency] = $currency;
+    try {
+      // Trustlines will determine which currencies can be accepted.
+      $data = ripple_rest('accounts/' . $account . '/trustlines');
+      if (!$data['success']) {
+        $status['severity'] = REQUIREMENT_ERROR;
+        $status['description'] = $data['message'];
       }
-      $status['description'] = t('Accepts %currencies.', array('%currencies' => implode(', ', $accepts)));
+      else {
+        $status['severity'] = REQUIREMENT_OK;
+        $accepts = array('XRP');
+        foreach ($data['trustlines'] as $trustline) {
+          $currency = $trustline['currency'];
+          $accepts[$currency] = $currency;
+        }
+        $status['description'] = t('Accepts %currencies.', array('%currencies' => implode(', ', $accepts)));
 
-      // @todo Check balances and warn if maxed out, or near 0.
+        // @todo Check balances and warn if maxed out, or near 0.
+      }
+    }
+    catch (Exception $e) {
+        $status['severity'] = REQUIREMENT_ERROR;
+        $status['description'] = $e->getMessage();
     }
   }
   $items['ripple_account'] = $status;
 
   return $items;
+}
+
+
+function ripple_field_schema($field) {
+  if ($field['type'] == RIPPLE_FIELD_TYPE_AMOUNT) {
+    return array(
+      'columns' => array(
+        'value' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+        ),
+        'currency' => array(
+          'type' => 'varchar',
+          'length' => 255, // Should never be more than 3.
+          'not null' => TRUE,
+        ),
+        'issuer' => array(
+          'type' => 'varchar',
+          'length' => 255,
+          'not null' => FALSE, // NULL OK when currency == XRP
+        ),
+      ),
+      'indexes' => array(
+        'currency' => array('currency', 'issuer'),
+      ),
+    );
+  }
+
+  elseif ($field['type'] == RIPPLE_FIELD_TYPE_CURRENCY) {
+    return array(
+      'columns' => array(
+        'currency' => array(
+          'type' => 'varchar',
+          'length' => 255, // Should never be more than 3.
+          'not null' => TRUE,
+        ),
+        'issuer' => array(
+          'type' => 'varchar',
+          'length' => 255,
+          'not null' => FALSE, // NULL OK when currency == XRP
+        ),
+      ),
+      'indexes' => array(
+        'currency' => array('currency', 'issuer'),
+      ),
+    );
+  }
+
+
 }

@@ -2,3 +2,5 @@ name = Ripple
 description = Low level API module for Ripple
 package = Ripple
 core = 7.x
+
+stylesheets[all][] = ripple.css

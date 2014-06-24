@@ -13,6 +13,10 @@ define('RIPPLE_VAR_REST_VERSION', 'ripple__rest_version');
 define('RIPPLE_VAR_ACCOUNT', 'ripple__account');
 define('RIPPLE_VAR_CURRENCY', 'ripple__currency');
 
+// What little documentation there is is at http://docs.blobvaultv1.apiary.io/.
+define('RIPPLE_VAR_ID_URL', 'ripple__id_url');
+define('RIPPLE_VAR_ID_VERSION', 'ripple__id_version');
+
 function ripple_menu() {
   $items = array();
 
@@ -66,16 +70,305 @@ function ripple_http($url, array $options = array()) {
   }
 }
 
+function ripple_rest_url() {
+  return variable_get(RIPPLE_VAR_REST_URL, 'http://localhost:5990');
+}
+function ripple_id_url() {
+  return variable_get(RIPPLE_VAR_ID_URL, 'https://id.ripple.com');
+}
 
 function ripple_rest($path, array $options = array()) {
   // Defaults
   $options += array(
-    'server' => variable_get(RIPPLE_VAR_REST_URL, 'http://localhost:5990'),
+    'server' => ripple_rest_url(),
     'version' => variable_get(RIPPLE_VAR_REST_VERSION, 'v1'),
     'query' => array(),
+    'method' => 'GET',
+    'data' => NULL,
+    'headers' => array(),
   );
 
   $url = $options['server'] . '/' . $options['version'] . '/' . $path;
 
-  return ripple_http($url, array('query' => $options['query']));
+  try {
+    return ripple_http($url, array(
+                         'headers' => $options['headers'],
+                         'method' => $options['method'],
+                         'query' => $options['query'],
+                         'data' => $options['data'],
+                       ));
+  }
+  catch (Exception $e) {
+    // Return an error structure similar to Ripple's errors.
+    return array(
+      'success' => FALSE,
+      'message' => $e->getMessage(),
+      'exception' => $e,
+    );
+  }
+}
+
+function ripple_rest_post($path, array $options = array()) {
+  $options['method'] = 'POST';
+  $options['data'] = json_encode($options['query']);
+  $options['headers']['content-type'] = 'application/json';
+  unset($options['query']);
+  return ripple_rest($path, $options);
+}
+
+
+function ripple_id($path, array $options = array()) {
+  // Defaults
+  $options += array(
+    'server' => ripple_id_url(),
+    'version' => variable_get(RIPPLE_VAR_ID_VERSION, 'v1'),
+  );
+
+  // The data structures for the id features are thankfully similar to REST.  So, we can use ripple_rest.
+  return ripple_rest($path, $options);
+}
+
+
+function ripple_element_info() {
+  // Ripple amount, includes value and currency in fieldset.
+  $items['ripple_amount'] = array(
+    '#input' => TRUE,
+    '#element_validate' => array('ripple_element_validate_amount'),
+    '#process' => array('ripple_element_process_amount', 'form_process_fieldset', 'ajax_process_form'),
+    '#pre_render' => array('form_pre_render_fieldset'),
+    '#theme_wrappers' => array(
+      'fieldset',
+    ),
+  );
+
+  // Ripple account, based on textfield.
+  $items['ripple_account'] = array(
+    '#input' => TRUE,
+    '#size' => 40,
+    '#maxlength' => 128,
+    '#autocomplete_path' => FALSE,
+    '#process' => array('ajax_process_form'),
+    '#theme' => 'textfield',
+    '#theme_wrappers' => array('form_element'),
+    '#element_validate' => array('ripple_element_validate_account'),
+  );
+
+  // Ripple secret, based on password.
+  $items['ripple_secret'] = array(
+    '#input' => TRUE,
+    '#size' => 40,
+    '#maxlength' => 128,
+    '#autocomplete_path' => FALSE,
+    '#process' => array('ripple_element_process_secret', 'ajax_process_form'),
+    '#theme' => 'password',
+    '#theme_wrappers' => array('form_element'),
+    '#element_validate' => array('ripple_element_validate_secret', 'ripple_element_validate_encrypt'),
+    '#encrypt' => TRUE, // Encrypt value while validating.
+  );
+
+  // Ripple currency, based on textfield.
+  $items['ripple_currency'] = array(
+    '#input' => TRUE,
+    '#size' => 3,
+    '#maxlength' => 3,
+    '#autocomplete_path' => FALSE,
+    '#process' => array('ajax_process_form'),
+    '#theme' => 'textfield',
+    '#theme_wrappers' => array('form_element'),
+    // @todo validate
+  );
+
+  return $items;
+}
+
+
+function ripple_element_validate_account($element, &$form_state) {
+  if (empty($element['#value'])) {
+    return;
+  }
+
+  // @todo Perhaps check this only for names starting in ~.
+  $id = ripple_id('user/' . $element['#value']);
+
+  if (!empty($id) && !empty($id['address'])) {
+    if ($id['address'] != $element['#value']) {
+      drupal_set_message(t("Using old-style Ripple address %address for %name.", array(
+                             '%address' => $id['address'],
+                             '%name' => $element['#value'],
+                           )));
+      form_set_value($element, $id['address'], $form_state);
+      $element['#value'] = $id['address'];
+    }
+  }
+
+  if (!empty($element['#require_activated'])) {
+    $data = ripple_rest('accounts/' . $element['#value'] . '/trustlines');
+
+    if (!$data['success']) {
+      form_error($element, t('%msg Failed to validate Ripple account %account. Has the account been activated?', array(
+                               '%account' => $element['#value'],
+                               '%msg' => $data['message'],
+                             )), $form_state);
+    }
+  }
+}
+
+function ripple_element_validate_secret($element, &$form_state) {
+  if (empty($element['#value'])) {
+    return;
+  }
+
+  // @todo Valid secrets start with 's'
+  // @todo Decript secret to strongly validate it.
+
+
+}
+
+function ripple_element_process_secret(&$element, &$form_state, $form) {
+  if ($element['#encrypt'] === FALSE || empty($element['#default_value'])) {
+    return;
+  }
+
+  // Note that by the time we are called, it's $element['#value'], not $element['#default_value'].
+  if ($element['#default_value'] == $element['#value']) {
+    $element['#value'] = ripple_decrypt($element['#value']);
+  }
+
+  return $element;
+}
+
+/**
+ * Drupal FAPI element validate callback.
+ *
+ * Encrypts a string value of a form element.  Useful before saving a sensitive variable.
+ */
+function ripple_element_validate_encrypt($element, &$form_state) {
+
+  if ($element['#encrypt'] === FALSE || empty($element['#value'])) {
+    return;
+  }
+
+  $encrypted = ripple_encrypt($element['#value']);
+  form_set_value($element, $encrypted, $form_state);
+}
+
+
+function ripple_element_process_amount(&$element, &$form_state, $form) {
+
+  if (!empty($element['#default_value'])) {
+    $defaults = $element['#default_value'];
+  }
+  else {
+    $defaults = array();
+  }
+  // Avoid PHP notices
+  $defaults += array(
+    'value' => NULL,
+    'currency' => NULL,
+    'issuer' => NULL,
+  );
+
+  $element['value'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Value'),
+    '#size' => 10,
+    '#required' => $element['#required'],
+    '#element_validate' => array('element_validate_integer_positive'),
+    '#default_value' => $defaults['value'],
+  );
+  $element['currency'] = array(
+    '#type' => 'ripple_currency',
+    '#title' => t('Currency'),
+    '#size' => 3,
+    '#required' => $element['#required'],
+    '#default_value' => $defaults['currency'],
+  );
+  $element['issuer'] = array(
+    '#type' => 'ripple_account',
+    '#title' => t('Issuer'),
+    '#default_value' => $defaults['issuer'],
+  );
+
+  $element['#tree'] = TRUE;
+
+  // theme_fieldset has trouble with #value, which in our case the children are the value anyway.
+  $element['#value'] = NULL;
+  $element['#required'] = FALSE;
+  $element['#attributes']['class'][] = 'form-type-ripple-amount';
+
+  return $element;
+}
+
+function ripple_element_validate_amount($element, &$form_state) {
+
+}
+
+
+function ripple_rest_amount_format($amount) {
+  if (!empty($amount['issuer'])) {
+    return $amount['value'] . '+' . $amount['currency'] . '+' . $amount['issuer'];
+  }
+  else {
+    return $amount['value'] . '+' . $amount['currency'];
+  }
+}
+
+/**
+ * Helper for building ripple URIs.
+ *
+ * @see https://ripple.com/wiki/Ripple_URIs
+ */
+function ripple_uri($op, $options) {
+  $uri = url('https://ripple.com//send', array(
+               'query' => $options,
+             ));
+  return $uri;
+}
+
+function ripple_encrypt($text) {
+  if (module_exists('aes')) {
+    return aes_encrypt($text);
+  }
+  else {
+    return $text;
+  }
+}
+
+/**
+ * Helper wrapper around decrypt().
+ *
+ * @param $ciphertext
+ * $ciphertext is actually a serialized array of data, as created by ripple_encrypt().
+ */
+function ripple_decrypt($ciphertext) {
+  if (module_exists('aes')) {
+    return aes_decrypt($ciphertext);
+  }
+  else {
+    return $ciphertext;
+  }
+}
+
+function ripple_rest_api() {
+  module_load_include('inc', 'ripple', 'ripple.rest');
+}
+
+/**
+ * Helper around drupal_write_record() to consistantly write payment data to ripple_payment table.
+ @TODO FIX THIS XXX drupal_write_record return SAVED_UPDATED even when no rows are updated!!! https://drupal.org/node/602190
+ */
+function ripple_write_payment_record($payment, $realm, $primary_keys = array()) {
+
+  $payment['realm'] = $realm;
+  $result = drupal_write_record('ripple_payment',
+                                $payment,
+                                !empty($primary_keys) ? $primary_keys + array('realm' => $realm) : array());
+
+  // For convenience, we insert if update failed.
+  // This is because code may not no if it is receiving a transaction from ripple ledger for the first time or not.
+  if (!$result && !empty($primary_keys)) {
+    $result = drupal_write_record('ripple_payment', $payment);
+  }
+
+  return $result;
 }

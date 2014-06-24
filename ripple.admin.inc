@@ -56,6 +56,11 @@ function ripple_admin_settings_form($form, &$form_state) {
   return $form;
 }
 
+/**
+ * Drupal form submit callback.
+ *
+ * Unset empty variables.  This way they will get the default values passed to variable_get.
+ */
 function ripple_admin_unset_variables($form, &$form_state) {
   foreach ($form_state['values'] as $key => $val) {
     if (!$val) {
