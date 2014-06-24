@@ -1,0 +1,188 @@
+<?php
+
+function ripple_devel_menu() {
+  $items['ripple_devel/rest/payment'] = array(
+    'title' => 'Payment via Ripple REST',
+    'access arguments' => array('access devel information'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ripple_devel_rest_payment_form'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+
+
+function ripple_devel_rest_payment_form($form, &$form_state) {
+
+  if (empty($form_state['steps'])) {
+    $form_state['steps'] = array(
+      'current' => 1,
+      'values' => array(),
+    );
+  }
+
+  $function = __FUNCTION__ . '_step_' . $form_state['steps']['current'];
+  if (function_exists($function)) {
+    $form = $function($form, $form_state);
+  }
+
+  if (empty($form['actions'])) {
+    $form['actions']['next'] = array(
+      '#type' => 'submit',
+      '#value' => t('Next >'),
+    );
+  }
+
+  if ($form_state['steps']['current'] > 1) {
+    $form['actions'] += array(
+      'back' => array(
+        '#type' => 'submit',
+        '#value' => t('< Back'),
+        '#weight' => -1,
+      ),
+    );
+  }
+
+  return $form;
+}
+
+function ripple_devel_rest_payment_form_validate($form, &$form_state) {
+  $values = $form_state['values'];
+
+  if ($values['op'] == $values['next']) {
+    // Handle current step.
+    $function = __FUNCTION__ . '_step_' . $form_state['steps']['current'];
+    if (function_exists($function)) {
+      $function($form, $form_state);
+    }
+
+  }
+}
+
+function ripple_devel_rest_payment_form_submit($form, &$form_state) {
+  dpm(func_get_args(), __FUNCTION__);
+
+  $values = $form_state['values'];
+
+  if ($values['op'] == $values['next']) {
+    // Merge values from all steps.
+    $form_state['steps']['values'] += $form_state['values'];
+
+    // Handle current step.
+    $function = __FUNCTION__ . '_step_' . $form_state['steps']['current'];
+    if (function_exists($function)) {
+      $function($form, $form_state);
+    }
+
+    // Move on to next step.
+    $form_state['steps']['current']++;
+
+    $form_state['rebuild'] = TRUE;
+}
+  elseif ($values['op'] == $values['back']) {
+    $form_state['steps']['current']--;
+    $form_state['rebuild'] = TRUE;
+  }
+}
+
+function ripple_devel_rest_payment_form_step_1($form, &$form_state) {
+  $form['from'] = array(
+    '#type' => 'ripple_account',
+    '#title' => t('From account'),
+    '#default_value' => variable_get(RIPPLE_VAR_ACCOUNT, NULL),
+    '#required' => TRUE,
+  );
+
+  $form['to'] = array(
+    '#type' => 'ripple_account',
+    '#title' => t('To account'),
+    '#required' => TRUE,
+  );
+
+  $form['amount'] = array(
+    '#type' => 'ripple_amount',
+    '#title' => t('Amount of payment'),
+    //'#description' => t('TODO'),
+    '#required' => TRUE,
+    //'#collapsible' => TRUE,
+    '#tree' => TRUE,
+  );
+
+
+  return $form;
+}
+
+function ripple_devel_rest_payment_form_validate_step_1($form, &$form_state) {
+  dpm(func_get_args(), __FUNCTION__);
+  $values = $form_state['values'];
+
+  $result = ripple_rest('accounts/' . $values['from'] . '/payments/paths/' . $values['to'] . '/' . ripple_rest_amount_format($values['amount']));
+  dpm($result, __FUNCTION__);
+  $form_state['payment_paths'] = $result;
+  if (!$result['success']) {
+    form_error($form['to'], t('No path found for this payment.  <em>!message</em>', array(
+                                '!message' => $result['message'],
+                              )));
+  }
+}
+
+
+function ripple_devel_rest_payment_form_step_2($form, &$form_state) {
+
+  foreach ($form_state['payment_paths']['payments'] as $delta => $path) {
+    $options[$delta] = t('!send_amount => !receive_amount', array(
+                           '!send_amount' => $path['source_amount']['value'] . ' ' . $path['source_amount']['currency'],
+                           '!receive_amount' => $path['destination_amount']['value'] . ' ' . $path['destination_amount']['currency'],
+                         ));
+  }
+
+  $form['payment_path'] = array(
+    '#type' => 'select',
+    '#title' => t('Payment path'),
+    '#options' => $options,
+    '#required' => TRUE,
+  );
+
+  $form['destination_tag'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Destination tag'),
+  );
+
+  $form['invoice_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Invoice id'),
+  );
+
+
+  // ripple-rest provides a UUID generator
+  $uuid = ripple_rest('uuid');
+
+  $form['client_resource_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Client resource ID (UUID)'),
+    '#required' => TRUE,
+    '#default_value' => $uuid['uuid'],
+  );
+
+  $form['secret'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Secret'),
+    '#required' => TRUE,
+    '#description' => t('Only submit your secret to a trusted server.'),
+  );
+
+  $form['actions']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+    '#submit' => array(__FUNCTION__ . '_submit'),
+  );
+
+  return $form;
+}
+
+function ripple_devel_rest_payment_form_step_2_submit($form, &$form_state) {
+  dpm(func_get_args(), __FUNCTION__);
+
+}

@@ -1,0 +1,6 @@
+name = Ripple Devel
+description = Debug and test Ripple module
+package = Ripple
+core = 7.x
+
+dependencies[] = devel
