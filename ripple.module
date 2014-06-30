@@ -73,6 +73,9 @@ function ripple_http($url, array $options = array()) {
 function ripple_rest_url() {
   return variable_get(RIPPLE_VAR_REST_URL, 'http://localhost:5990');
 }
+function ripple_rest_version() {
+  return variable_get(RIPPLE_VAR_REST_URL, 'v1');
+}
 function ripple_id_url() {
   return variable_get(RIPPLE_VAR_ID_URL, 'https://id.ripple.com');
 }
@@ -81,7 +84,7 @@ function ripple_rest($path, array $options = array()) {
   // Defaults
   $options += array(
     'server' => ripple_rest_url(),
-    'version' => variable_get(RIPPLE_VAR_REST_VERSION, 'v1'),
+    'version' => ripple_rest_version(),
     'query' => array(),
     'method' => 'GET',
     'data' => NULL,

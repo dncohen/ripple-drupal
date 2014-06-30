@@ -5,7 +5,7 @@ function ripple_commerce_rest_settings_form($settings = array()) {
   // Defaults to avoid PHP notices.
   $settings += array(
     RIPPLE_VAR_ACCOUNT => NULL,
-    RIPPLE_VAR_CURRENCY => NULL,
+    //RIPPLE_VAR_CURRENCY => NULL,
     RIPPLE_VAR_REST_URL => NULL,
     RIPPLE_VAR_REST_VERSION => NULL,
   );
@@ -13,39 +13,37 @@ function ripple_commerce_rest_settings_form($settings = array()) {
   $form = array();
 
   $form[RIPPLE_VAR_ACCOUNT] = array(
-    '#type' => 'textfield',
+    '#type' => 'ripple_account',
     '#title' => t('Ripple account'),
-    '#description' => t('TODO'),
+    '#description' => t('Specify the Ripple address where payments will be recieved.  <br/>Note that Ripple Commerce will use destination tags that must be unique.  This means you should not use an address which has received any payments with destination tags from any other application.  Similarly, you should <strong>not</strong> use the same Ripple account on both a development or staging server and a live server.  Each Commerce server needs its own Ripple account.'),
     '#default_value' => $settings[RIPPLE_VAR_ACCOUNT],
   );
 
+  /* Disabled, currency, because that is controlled elsewhere in Drupal Commerce.
   $form[RIPPLE_VAR_CURRENCY] = array(
-    '#type' => 'textfield',
+    '#type' => 'ripple_currency',
     '#title' => t('Default currency'),
-    '#description' => t('TODO'),
+    '#description' => t('Ripple allows payment in ripples (XRP) or virtually any other currency.  Specify a default currency here, you will be able to override this choice for each product.'),
     '#default_value' => $settings[RIPPLE_VAR_CURRENCY],
     '#size' => 3,
   );
+  */
 
   $form[RIPPLE_VAR_REST_URL] = array(
     '#type' => 'textfield',
     '#title' => t('Ripple server REST URL'),
-    '#description' => t('TODO'),
+    '#description' => t('Leave blank to use the site-wide default, %value.', array('%value' => ripple_rest_url())),
     '#default_value' => $settings[RIPPLE_VAR_REST_URL],
   );
 
   $form[RIPPLE_VAR_REST_VERSION] = array(
     '#type' => 'textfield',
-    '#title' => t('Ripple server REST URL'),
-    '#description' => t('TODO'),
+    '#title' => t('Ripple server REST version'),
+    '#description' => t('Leave blank to use the site-wide default, %value.', array('%value' => ripple_rest_version())),
     '#default_value' => $settings[RIPPLE_VAR_REST_VERSION],
   );
 
   return $form;
-}
-
-function ripple_commerce_rest_submit_formXXX($payment_method, $pane_values, $checkout_pane, $order) {
-  dpm(func_get_args(), __FUNCTION__);
 }
 
 
@@ -94,7 +92,7 @@ function ripple_commerce_rest_redirect_form($form, &$form_state, $order, $paymen
              RIPPLE_VAR_REST_URL => 'http://localhost:5990',
              RIPPLE_VAR_REST_VERSION => 'v1',
              RIPPLE_VAR_ACCOUNT => NULL,
-             RIPPLE_VAR_CURRENCY => NULL,
+             //RIPPLE_VAR_CURRENCY => NULL,
            ) as $key => $default) {
     if (empty($payment_method['settings'][$key])) {
       $payment_method['settings'][$key] = variable_get($key, $default);

@@ -39,7 +39,8 @@ function ripple_commerce_commerce_currency_info() {
   $items['XRP'] = array(
     'code' => 'XRP',
     'code_placement' => 'after',
-    'symbol' => '¤',
+    //'symbol' => '¤', // Vague currency symbol.
+    'symbol' => 'Ʀ', // Used by kraken.
     'symbol_placement' => 'before',
     'name' => t('Ripple'),
     'major_unit' => t('ripple'),
