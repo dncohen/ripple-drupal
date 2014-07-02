@@ -1,0 +1,11 @@
+Copyright (c) 2014 Dave Cohen.
+
+This Ripple module for Drupal is released under two licenses.  The ISC
+license is provided for compatibility with other Ripple software,
+including the Ripple REST server and Ripple Lib.
+
+The GPL license is for compatibility with Drupal.  In practice to use
+this module you will need to install Drupal, which is released under
+the GPL.
+
+See the attached LICENSE.*.txt files for additional details.
