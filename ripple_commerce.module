@@ -48,6 +48,7 @@ function ripple_commerce_commerce_currency_info() {
 
     'rounding_step' => 0.000001,
     'decimals' => 6,
+
   );
   return $items;
 }
@@ -128,6 +129,8 @@ function ripple_commerce_cron() {
 
     }
   }
+
+  // @todo The following logic can be simplified by using ripple_rest_receive_payments(), which is currently under developement.
 
   foreach ($pending_accounts as $account => $dummy) {
     $ledger_var = 'ripple_commerce__' . $account . '__cron_next_ledger';
