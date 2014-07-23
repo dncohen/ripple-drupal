@@ -91,7 +91,14 @@ function ripple_rest($path, array $options = array()) {
     'headers' => array(),
   );
 
-  $url = $options['server'] . '/' . $options['version'] . '/' . $path;
+  // http://stackoverflow.com/questions/1962031/how-to-check-if-a-string-starts-with-in-php
+  if ($path[0] === '/') {
+    // Paths that start with / have the version explicitly.
+    $url = $options['server'] . $path;
+  }
+  else {
+    $url = $options['server'] . '/' . $options['version'] . '/' . $path;
+  }
 
   try {
     return ripple_http($url, array(
@@ -201,6 +208,9 @@ function ripple_element_validate_account($element, &$form_state) {
                            )));
       form_set_value($element, $id['address'], $form_state);
       $element['#value'] = $id['address'];
+
+      // Store details so that custom code may refer to it.
+      $form_state['ripple_account'][$id['address']] = $id;
     }
   }
 
@@ -306,13 +316,32 @@ function ripple_element_validate_amount($element, &$form_state) {
 
 }
 
-
+/**
+ * Format an amount in machine-readable format expected by ripple REST.
+ */
 function ripple_rest_amount_format($amount) {
   if (!empty($amount['issuer'])) {
     return $amount['value'] . '+' . $amount['currency'] . '+' . $amount['issuer'];
   }
   else {
     return $amount['value'] . '+' . $amount['currency'];
+  }
+}
+
+/**
+ * Format an amount in human readable format.
+ */
+function ripple_human_amount_format($amount) {
+  if (!empty($amount['counterparty'])) {
+    // REST API sometimes returns counterparty, sometimes issuer.
+    $amount['issuer'] = $amount['counterparty'];
+  }
+
+  if (!empty($amount['issuer'])) {
+    return $amount['value'] . " " . $amount['currency'] . ':' . $amount['issuer'];
+  }
+  else {
+    return $amount['value'] . " " . $amount['currency'];
   }
 }
 
@@ -357,21 +386,50 @@ function ripple_rest_api() {
 }
 
 /**
- * Helper around drupal_write_record() to consistantly write payment data to ripple_payment table.
- @TODO FIX THIS XXX drupal_write_record return SAVED_UPDATED even when no rows are updated!!! https://drupal.org/node/602190
+ * Write a local record of payment details.  We may be notified of the
+ * same payment more than once, so we don't use drupal_write_record(), as
+ * it returns success even when it fails to write a record.
  */
-function ripple_write_payment_record($payment, $realm, $primary_keys = array()) {
-
-  $payment['realm'] = $realm;
-  $result = drupal_write_record('ripple_payment',
-                                $payment,
-                                !empty($primary_keys) ? $primary_keys + array('realm' => $realm) : array());
-
-  // For convenience, we insert if update failed.
-  // This is because code may not no if it is receiving a transaction from ripple ledger for the first time or not.
-  if (!$result && !empty($primary_keys)) {
-    $result = drupal_write_record('ripple_payment', $payment);
+function ripple_write_payment_record($payment, $realm) {
+  $table = 'ripple_payment';
+  $schema = drupal_get_schema($table);
+  if (empty($schema)) {
+    return FALSE;
   }
+
+  $keys = array(
+    'realm' => $realm,
+    'hash' => $payment['hash'],
+  );
+  $fields = array();
+  $fields['realm'] = $realm;
+
+  // Explode amounts, so that drupal_write_record() can write them.
+  foreach (array('source_amount', 'destination_amount') as $amount_key) {
+    foreach ($payment[$amount_key] as $key => $value) {
+      $k = $amount_key . '_' . $key;
+      $fields[$k] = $value;
+    }
+  }
+
+  // This strategy of inspecting $schema based on drupal_write_record().
+  foreach ($schema['fields'] as $field_name => $field_data) {
+    if (!isset($payment[$field_name])) {
+      continue;
+    }
+    if (empty($field_data['serialize'])) {
+      $fields[$field_name] = $payment[$field_name];
+    }
+    else {
+      $fields[$field_name] = serialize($payment[$field_name]);
+    }
+  }
+
+  // This will either insert or update an existing row.
+  $result = db_merge($table)
+    ->key($keys)
+    ->fields($fields)
+    ->execute();
 
   return $result;
 }

@@ -21,26 +21,27 @@ function ripple_rest_receive_payments($account) {
 
     $result = ripple_rest('accounts/' . $account . '/payments', array(
                             'query' => array(
-                              //'directions' => 'incoming', <== we want both.
+                              //'directions' => 'incoming', <== commented out because we want both.
                               'earliest_first' => 'true',
                               'start_ledger' => $next_ledger,
                               'page' => $next_page,
                               'results_per_page' => 20,
                             )));
 
-    // Sanity check.  Make sure page option works as documented.
-    // Looks like it doesn't work!
-    $result2 = ripple_rest('accounts/' . $account . '/payments', array(
-                             'query' => array(
-                               //'directions' => 'incoming', <== we want both.
-                               'earliest_first' => 'true',
-                               'start_ledger' => $next_ledger,
-                               'page' => $next_page + 1,
-                               'results_per_page' => 20,
-                             )));
-    dpm($result, __FUNCTION__ . " page $next_page");
-    dpm($result2, __FUNCTION__ . " page $next_page + 1");
-
+    if (module_exists('devel') && user_access('access devel information')) {
+      // Sanity check.  Make sure page option works as documented.
+      // note: Looks like it doesn't work!
+      $result2 = ripple_rest('accounts/' . $account . '/payments', array(
+                               'query' => array(
+                                 //'directions' => 'incoming', <== we want both.
+                                 'earliest_first' => 'true',
+                                 'start_ledger' => $next_ledger,
+                                 'page' => $next_page + 1,
+                                 'results_per_page' => 20,
+                               )));
+      dpm($result, __FUNCTION__ . " page $next_page");
+      dpm($result2, __FUNCTION__ . " page $next_page + 1");
+    }
 
     if (!$result['success']) {
       $payments = FALSE;
@@ -69,6 +70,13 @@ function ripple_rest_receive_payments($account) {
     lock_release($lock_key);
   }
   return $payments;
+}
+
+function ripple_rest_batch_receive_payments($account, &$context) {
+  // @todo make this function more intelligent, so that ripple_rest_receive_payments is called more than once when it needs to be.
+  ripple_rest_receive_payments($account);
+    // @todo if more pending payments, set $finished < 1.
+
 }
 
 function ripple_rest_batch_get_server_status($options_in, &$context) {

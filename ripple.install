@@ -4,6 +4,7 @@ function ripple_schema() {
   $schema['ripple_payment'] = array(
     'description' => 'Track payments to/from Ripple accounts.',
     'fields' => array(
+
       'realm' => array(
         'description' => 'Allows multiple modules to use this table.',
         'type' => 'varchar',
@@ -119,6 +120,7 @@ function ripple_schema() {
       'destination_tag' => array('destination_tag'),
       'invoice_id' => array('invoice_id'),
     ),
+
   );
 
   return $schema;
